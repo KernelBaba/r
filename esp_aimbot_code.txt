@@ -1,0 +1,272 @@
+// ============================================================
+// STANDALONE BOX 3D + AIMBOT CODE
+// Kullanmak icin su fonksiyonlarin SDK'nda bulunmasi gerek:
+//   ashootercharacter, aplayercontroller, aplayercameramanager,
+//   uskeletalmeshcomponent, ucanvas, fvector, fvector2d, flinearcolor
+// ============================================================
+
+// ---------- BOX 3D ----------
+
+/*
+  Cagirma:
+    if (globals::visuals::box3d && actor->is_alive()) {
+        draw_3d(controllers, mesh, head_location, root_location, clr, canvas);
+    }
+
+  Ornek:
+    for (int i = 0; i < actors.count; i++) {
+        ashootercharacter* actor = actors[i];
+        if (!actor || actor == local_character || !actor->is_alive()) continue;
+
+        uskeletalmeshcomponent* mesh = actor->get_mesh();
+        if (!mesh) continue;
+
+        fvector head = mesh->get_bone_location(8);
+        fvector root = mesh->get_bone_location(0);
+        if (!head.is_valid() || !root.is_valid()) continue;
+
+        flinearcolor color = { 1, 1, 1, 1 };
+        draw_3d(controllers, mesh, head, root, color, canvas);
+    }
+*/
+
+static void draw_3d(aplayercontroller* controller,
+                     uskeletalmeshcomponent* mesh,
+                     fvector head_bone,
+                     fvector base_bone,
+                     flinearcolor color,
+                     ucanvas* canvas)
+{
+    if (!controller || !mesh || !canvas) return;
+    if (!head_bone.is_valid() || !base_bone.is_valid()) return;
+
+    // 8 corner points of the 3D box
+    fvector corners[8] = {
+        {base_bone.x + 53, base_bone.y - 55, base_bone.z},
+        {base_bone.x - 53, base_bone.y - 55, base_bone.z},
+        {base_bone.x - 53, base_bone.y + 55, base_bone.z},
+        {base_bone.x + 53, base_bone.y + 55, base_bone.z},
+        {head_bone.x + 53, head_bone.y - 55, head_bone.z + 26},
+        {head_bone.x - 53, head_bone.y - 55, head_bone.z + 26},
+        {head_bone.x - 53, head_bone.y + 55, head_bone.z + 26},
+        {head_bone.x + 53, head_bone.y + 55, head_bone.z + 26}
+    };
+
+    fvector2d screen[8];
+    for (int i = 0; i < 8; i++) {
+        if (!controller->project_world_location_to_screen(corners[i], screen[i], 0))
+            return;
+        if (!screen[i].is_valid()) return;
+    }
+
+    // Bottom face
+    canvas->k2_drawline(screen[0], screen[1], 1.5f, color);
+    canvas->k2_drawline(screen[1], screen[2], 1.5f, color);
+    canvas->k2_drawline(screen[2], screen[3], 1.5f, color);
+    canvas->k2_drawline(screen[3], screen[0], 1.5f, color);
+
+    // Top face
+    canvas->k2_drawline(screen[4], screen[5], 1.5f, color);
+    canvas->k2_drawline(screen[5], screen[6], 1.5f, color);
+    canvas->k2_drawline(screen[6], screen[7], 1.5f, color);
+    canvas->k2_drawline(screen[7], screen[4], 1.5f, color);
+
+    // Vertical edges
+    canvas->k2_drawline(screen[0], screen[4], 1.5f, color);
+    canvas->k2_drawline(screen[1], screen[5], 1.5f, color);
+    canvas->k2_drawline(screen[2], screen[6], 1.5f, color);
+    canvas->k2_drawline(screen[3], screen[7], 1.5f, color);
+}
+
+
+// ---------- AIMBOT ----------
+
+/*
+  Gerekli yardimci fonksiyonlar:
+*/
+
+// Bone mapping
+static fvector get_target_bone(uskeletalmeshcomponent* mesh, int bone) {
+    switch (bone) {
+    case 0: return mesh->get_bone_location(8);  // head
+    case 1: return mesh->get_bone_location(6);  // neck
+    case 2: return mesh->get_bone_location(4);  // chest
+    default: return fvector();
+    }
+}
+
+// Smoothing
+static fvector smooth_aim(fvector target, fvector current, double smooth_factor) {
+    fvector diff = target - current;
+    // normalize angles
+    float len = sqrtf(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+    if (len > 0) { diff.x /= len; diff.y /= len; diff.z /= len; }
+    return current + diff / smooth_factor;
+}
+
+/*
+  Aimbot target selection:
+
+    int target_id = -1;
+    float closest_distance = FLT_MAX;
+
+    for (int i = 0; i < actors.count; i++) {
+        ashootercharacter* actor = actors[i];
+        if (!actor || actor == local_character || !actor->is_alive()) continue;
+
+        uskeletalmeshcomponent* mesh = actor->get_mesh();
+        if (!mesh) continue;
+
+        fvector head = mesh->get_bone_location(8);
+        if (!head.is_valid()) continue;
+
+        fvector2d head_screen;
+        if (!controller->project_world_location_to_screen(head, head_screen, false))
+            continue;
+
+        bool visible = controller->line_of_sight(actor);
+        if (!visible) continue;
+
+        float distance = local_character->k2_get_actor_location().distance(actor->k2_get_actor_location());
+
+        // Distance-based target selection
+        if (distance < closest_distance) {
+            closest_distance = distance;
+            target_id = i;
+        }
+
+        // Crosshair-based alternative:
+        // float screen_dist = sqrtf(pow(head_screen.x - screen_center_x, 2) + pow(head_screen.y - screen_center_y, 2));
+        // if (screen_dist < closest_distance) {
+        //     closest_distance = screen_dist;
+        //     target_id = i;
+        // }
+    }
+*/
+
+/*
+  Aimbot aim execution:
+
+    if (target_id != -1) {
+        ashootercharacter* target = actors[target_id];
+        if (!target || target == local_character) return;
+
+        uskeletalmeshcomponent* mesh = target->get_mesh();
+        if (!mesh) return;
+
+        fvector aim_pos = get_target_bone(mesh, bone_index);  // 0=head
+        if (!aim_pos.is_valid()) return;
+
+        bool aim_key_down = GetAsyncKeyState(aim_key);  // VK_RBUTTON etc.
+        if (!aim_key_down) return;
+
+        fvector camera_pos = camera->get_camera_location();
+        fvector control_rot = controller->get_control_rotation();
+
+        fvector delta = aim_pos - camera_pos;
+        float dist = delta.size();
+        if (dist <= 0) return;
+
+        // Calculate target angles
+        float norm_z = delta.z / dist;
+        if (norm_z < -1.0f) norm_z = -1.0f;
+        if (norm_z > 1.0f) norm_z = 1.0f;
+
+        float pitch = -(acos(norm_z) * (180.0f / 3.14159265f) - 90.0f);
+        float yaw = atan2(delta.y, delta.x) * (180.0f / 3.14159265f);
+
+        fvector target_rot = { pitch, yaw, 0.0f };
+        fvector new_rot = target_rot;
+
+        // Recoil control
+        // fvector recoil = camera->get_camera_rotation() - control_rot;
+        // new_rot = target_rot - recoil * 2.0f;
+
+        // Apply smoothing
+        new_rot = smooth_aim(new_rot, control_rot, smooth_value);  // 1.0f = instant, higher = smoother
+
+        new_rot.x = fmod(new_rot.x + 360.0f, 360.0f);
+        new_rot.y = fmod(new_rot.y + 360.0f, 360.0f);
+
+        if (!new_rot.is_valid()) return;
+
+        controller->set_control_rotation(new_rot);
+    }
+*/
+
+// ============================================================
+// FULL AIMBOT LOOP (copy-paste ready)
+// ============================================================
+
+/*
+void run_aimbot(uworld* world, aplayercontroller* controller,
+                ashootercharacter* local, aplayercameramanager* camera,
+                ucanvas* canvas)
+{
+    auto actors = world->get_actors();
+    if (!actors.count) return;
+
+    int target_id = -1;
+    float closest_dist = FLT_MAX;
+    float screen_cx = canvas->get_screen_size().x / 2.0f;
+    float screen_cy = canvas->get_screen_size().y / 2.0f;
+
+    // ---- TARGET SELECTION ----
+    for (int i = 0; i < actors.count; i++) {
+        ashootercharacter* actor = actors[i];
+        if (!actor || actor == local || !actor->is_alive()) continue;
+
+        uskeletalmeshcomponent* mesh = actor->get_mesh();
+        if (!mesh) continue;
+
+        fvector head = mesh->get_bone_location(8);
+        if (!head.is_valid()) continue;
+
+        bool vis = controller->line_of_sight(actor);
+        if (!vis) continue;
+
+        float dist = local->k2_get_actor_location().distance(actor->k2_get_actor_location());
+        if (dist < closest_dist) {
+            closest_dist = dist;
+            target_id = i;
+        }
+    }
+
+    // ---- AIM EXECUTION ----
+    if (target_id == -1) return;
+
+    ashootercharacter* target = actors[target_id];
+    if (!target || target == local) return;
+
+    uskeletalmeshcomponent* mesh = target->get_mesh();
+    if (!mesh) return;
+
+    fvector aim_pos = get_target_bone(mesh, 0);  // head
+    if (!aim_pos.is_valid()) return;
+
+    if (!(GetAsyncKeyState(VK_RBUTTON) & 0x8000)) return;  // hold right mouse
+
+    fvector cam_pos = camera->get_camera_location();
+    fvector ctrl_rot = controller->get_control_rotation();
+    fvector delta = aim_pos - cam_pos;
+
+    float dist = delta.size();
+    if (dist <= 0) return;
+
+    float nz = delta.z / dist;
+    if (nz < -1.0f) nz = -1.0f;
+    if (nz > 1.0f) nz = 1.0f;
+
+    float pitch = -(acos(nz) * (180.0f / 3.14159265f) - 90.0f);
+    float yaw   = atan2(delta.y, delta.x) * (180.0f / 3.14159265f);
+
+    fvector target_rot = { pitch, yaw, 0.0f };
+    fvector new_rot = smooth_aim(target_rot, ctrl_rot, 5.0f);  // 5 = smooth
+
+    new_rot.x = fmod(new_rot.x + 360.0f, 360.0f);
+    new_rot.y = fmod(new_rot.y + 360.0f, 360.0f);
+    if (!new_rot.is_valid()) return;
+
+    controller->set_control_rotation(new_rot);
+}
+*/

@@ -1,0 +1,76 @@
+// ============================================================
+// SDK FONKSIYON IMZALARI
+// Bu fonksiyonlarin SDK'nda bulunmasi gerekiyor.
+// ============================================================
+
+// ---------- ashootercharacter ----------
+// functions.hpp:3717
+bool is_alive();
+
+// functions.hpp:3711
+fvector k2_get_actor_location();
+
+
+// ---------- uskeletalmeshcomponent ----------
+// functions.hpp:1023
+fvector get_bone_location(int32_t index);
+
+
+// ---------- aplayercontroller ----------
+// functions.hpp:4135
+bool project_world_location_to_screen(fvector world_location, fvector2d& screen_location, bool player_viewport_relative);
+
+// functions.hpp:4082
+bool line_of_sight(ashootercharacter* other);
+
+// functions.hpp:4136
+void set_control_rotation(fvector angle);
+
+// functions.hpp:4133
+fvector get_control_rotation();
+
+
+// ---------- aplayercameramanager ----------
+// functions.hpp:1276
+fvector get_camera_location();
+
+// functions.hpp:1277
+fvector get_camera_rotation();
+
+
+// ---------- ucanvas ----------
+// functions.hpp:4183
+void k2_drawline(fvector2d screenpos_a, fvector2d screenpos_b, float thickness, flinearcolor color);
+
+// functions.hpp:4181
+fvector2d get_screen_size();
+
+
+// ---------- fvector ----------
+// structs.hpp icinde:
+struct fvector {
+    double x, y, z;    // veya float? seninkine bak
+
+    // Kullanilan operator/metodlar:
+    fvector operator-(const fvector& other) const;
+    fvector operator+(const fvector& other) const;
+    fvector operator*(double scalar) const;
+    fvector operator/(double scalar) const;
+    float size() const;
+    float distance(const fvector& other) const;
+    bool is_valid() const;
+};
+
+
+// ---------- fvector2d ----------
+struct fvector2d {
+    float x, y;
+
+    bool is_valid() const;
+};
+
+
+// ---------- flinearcolor ----------
+struct flinearcolor {
+    float r, g, b, a;
+};

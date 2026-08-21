@@ -1,0 +1,424 @@
+// ============================================================
+// STANDALONE - BOX 3D + AIMBOT + SOL UST MENU
+// ============================================================
+// Kullanmak icin su SDK fonksiyonlarinin projende olmasi gerek:
+//   ashootercharacter, aplayercontroller, aplayercameramanager,
+//   uskeletalmeshcomponent, ucanvas, uworld
+// ============================================================
+
+#include <cmath>
+#include <cstdint>
+#include <Windows.h>
+
+// ============================================================
+// SDK STRUCTS
+// ============================================================
+struct fvector2d { float x, y;
+    bool is_valid() const { return x != 0 && y != 0 && isfinite(x) && isfinite(y); }
+    fvector2d operator+(const fvector2d& o) const { return {x+o.x, y+o.y}; }
+    fvector2d operator-(const fvector2d& o) const { return {x-o.x, y-o.y}; }
+    fvector2d operator*(float s) const { return {x*s, y*s}; }
+};
+
+struct fvector {
+    double x, y, z;
+    fvector operator+(const fvector& o) const { return {x+o.x, y+o.y, z+o.z}; }
+    fvector operator-(const fvector& o) const { return {x-o.x, y-o.y, z-o.z}; }
+    fvector operator*(double s) const { return {x*s, y*s, z*s}; }
+    fvector operator/(double s) const { return {x/s, y/s, z/s}; }
+    double size() const { return sqrt(x*x + y*y + z*z); }
+    double distance(const fvector& o) const { return (*this - o).size(); }
+    bool is_valid() const { return isfinite(x) && isfinite(y) && isfinite(z); }
+};
+
+struct flinearcolor { float r, g, b, a; };
+
+// SDK siniflari (sanal) - gercek SDK'indakiyla degistir
+class ucanvas {
+public:
+    fvector2d get_screen_size();
+    void k2_drawline(fvector2d from, fvector2d to, float thickness, flinearcolor color);
+};
+
+class uskeletalmeshcomponent {
+public:
+    fvector get_bone_location(int32_t index);
+};
+
+class ashootercharacter {
+public:
+    bool is_alive();
+    fvector k2_get_actor_location();
+    uskeletalmeshcomponent* get_mesh();
+};
+
+class aplayercontroller {
+public:
+    bool project_world_location_to_screen(fvector world, fvector2d& screen, bool relative);
+    bool line_of_sight(ashootercharacter* target);
+    fvector get_control_rotation();
+    void set_control_rotation(fvector angle);
+};
+
+class aplayercameramanager {
+public:
+    fvector get_camera_location();
+    fvector get_camera_rotation();
+};
+
+class uworld {
+public:
+    tarray<ashootercharacter*> get_actors();  // SDK'ndaki gibi
+};
+
+
+// ============================================================
+// CONFIG
+// ============================================================
+namespace config {
+    inline bool box3d_enabled = false;
+    inline bool aimbot_enabled = false;
+    inline int bone_index = 0;  // 0=head
+    inline float smooth = 5.0f;
+    inline float aim_fov = 500.0f;
+    inline bool vis_check = true;
+    inline int aim_key = VK_RBUTTON;
+
+    // Menu state
+    inline bool menu_open = false;
+    inline int tab = 0;  // 0=ESP, 1=Aimbot
+}
+
+
+// ============================================================
+// DRAWING HELPERS
+// ============================================================
+static void draw_filled_rect(ucanvas* c, float x, float y, float w, float h, flinearcolor col) {
+    for (float i = 0; i < h; i += 1.0f)
+        c->k2_drawline({x, y+i}, {x+w, y+i}, 1.0f, col);
+}
+
+static void draw_rect(ucanvas* c, float x, float y, float w, float h, flinearcolor col) {
+    c->k2_drawline({x, y}, {x+w, y}, 1.0f, col);
+    c->k2_drawline({x+w, y}, {x+w, y+h}, 1.0f, col);
+    c->k2_drawline({x+w, y+h}, {x, y+h}, 1.0f, col);
+    c->k2_drawline({x, y+h}, {x, y}, 1.0f, col);
+}
+
+
+// ============================================================
+// BOX 3D
+// ============================================================
+static void draw_box3d(aplayercontroller* controller, uskeletalmeshcomponent* mesh,
+                       fvector head, fvector base, flinearcolor color, ucanvas* canvas)
+{
+    if (!controller || !mesh || !canvas) return;
+    if (!head.is_valid() || !base.is_valid()) return;
+
+    fvector corners[8] = {
+        {base.x + 53, base.y - 55, base.z},
+        {base.x - 53, base.y - 55, base.z},
+        {base.x - 53, base.y + 55, base.z},
+        {base.x + 53, base.y + 55, base.z},
+        {head.x + 53, head.y - 55, head.z + 26},
+        {head.x - 53, head.y - 55, head.z + 26},
+        {head.x - 53, head.y + 55, head.z + 26},
+        {head.x + 53, head.y + 55, head.z + 26}
+    };
+
+    fvector2d s[8];
+    for (int i = 0; i < 8; i++)
+        if (!controller->project_world_location_to_screen(corners[i], s[i], 0) || !s[i].is_valid())
+            return;
+
+    // Bottom
+    canvas->k2_drawline(s[0], s[1], 1.5f, color);
+    canvas->k2_drawline(s[1], s[2], 1.5f, color);
+    canvas->k2_drawline(s[2], s[3], 1.5f, color);
+    canvas->k2_drawline(s[3], s[0], 1.5f, color);
+    // Top
+    canvas->k2_drawline(s[4], s[5], 1.5f, color);
+    canvas->k2_drawline(s[5], s[6], 1.5f, color);
+    canvas->k2_drawline(s[6], s[7], 1.5f, color);
+    canvas->k2_drawline(s[7], s[4], 1.5f, color);
+    // Vertical
+    canvas->k2_drawline(s[0], s[4], 1.5f, color);
+    canvas->k2_drawline(s[1], s[5], 1.5f, color);
+    canvas->k2_drawline(s[2], s[6], 1.5f, color);
+    canvas->k2_drawline(s[3], s[7], 1.5f, color);
+}
+
+
+// ============================================================
+// AIMBOT HELPERS
+// ============================================================
+static fvector get_aim_bone(uskeletalmeshcomponent* mesh, int bone) {
+    switch (bone) {
+    case 0: return mesh->get_bone_location(8);  // head
+    case 1: return mesh->get_bone_location(6);  // neck
+    case 2: return mesh->get_bone_location(4);  // chest
+    default: return mesh->get_bone_location(8);
+    }
+}
+
+static fvector smooth_angle(fvector target, fvector current, double smooth) {
+    fvector diff = target - current;
+    double len = diff.size();
+    if (len > 0) { diff.x /= len; diff.y /= len; diff.z /= len; }
+    return current + diff / smooth;
+}
+
+
+// ============================================================
+// ESP LOOP
+// ============================================================
+static void run_esp(uworld* world, aplayercontroller* controller,
+                    ashootercharacter* local, ucanvas* canvas)
+{
+    if (!config::box3d_enabled) return;
+    auto actors = world->get_actors();
+    for (int i = 0; i < actors.count; i++) {
+        auto actor = actors[i];
+        if (!actor || actor == local || !actor->is_alive()) continue;
+        auto mesh = actor->get_mesh();
+        if (!mesh) continue;
+
+        fvector head = mesh->get_bone_location(8);
+        fvector root = mesh->get_bone_location(0);
+        if (!head.is_valid() || !root.is_valid()) continue;
+
+        flinearcolor color = {1, 1, 1, 1};
+
+        if (config::vis_check && !controller->line_of_sight(actor))
+            color = {0.5f, 0.5f, 0.5f, 1};  // gray if not visible
+
+        draw_box3d(controller, mesh, head, root, color, canvas);
+    }
+}
+
+
+// ============================================================
+// AIMBOT LOOP
+// ============================================================
+static void run_aimbot(uworld* world, aplayercontroller* controller,
+                       ashootercharacter* local, aplayercameramanager* camera,
+                       ucanvas* canvas)
+{
+    if (!config::aimbot_enabled) return;
+    if (!(GetAsyncKeyState(config::aim_key) & 0x8000)) return;
+
+    auto actors = world->get_actors();
+    int target_id = -1;
+    float closest = FLT_MAX;
+    fvector2d screen_size = canvas->get_screen_size();
+    float cx = screen_size.x / 2.0f;
+    float cy = screen_size.y / 2.0f;
+
+    for (int i = 0; i < actors.count; i++) {
+        auto actor = actors[i];
+        if (!actor || actor == local || !actor->is_alive()) continue;
+        auto mesh = actor->get_mesh();
+        if (!mesh) continue;
+        fvector head = mesh->get_bone_location(8);
+        if (!head.is_valid()) continue;
+        fvector2d sp;
+        if (!controller->project_world_location_to_screen(head, sp, false)) continue;
+        if (config::vis_check && !controller->line_of_sight(actor)) continue;
+
+        float dx = sp.x - cx, dy = sp.y - cy;
+        float dist = sqrtf(dx*dx + dy*dy);
+        if (dist < config::aim_fov && dist < closest) {
+            closest = dist;
+            target_id = i;
+        }
+    }
+
+    if (target_id == -1) return;
+    auto target = actors[target_id];
+    if (!target || target == local) return;
+    auto mesh = target->get_mesh();
+    if (!mesh) return;
+
+    fvector aim_pos = get_aim_bone(mesh, config::bone_index);
+    if (!aim_pos.is_valid()) return;
+
+    fvector cam_pos = camera->get_camera_location();
+    fvector ctrl_rot = controller->get_control_rotation();
+    fvector delta = aim_pos - cam_pos;
+    double dist = delta.size();
+    if (dist <= 0) return;
+
+    double nz = delta.z / dist;
+    if (nz < -1.0) nz = -1.0;
+    if (nz > 1.0) nz = 1.0;
+
+    double pitch = -(acos(nz) * (180.0 / 3.14159265358979323846) - 90.0);
+    double yaw   = atan2(delta.y, delta.x) * (180.0 / 3.14159265358979323846);
+
+    fvector target_rot = {pitch, yaw, 0.0};
+    fvector new_rot = smooth_angle(target_rot, ctrl_rot, config::smooth);
+    new_rot.x = fmod(new_rot.x + 360.0, 360.0);
+    new_rot.y = fmod(new_rot.y + 360.0, 360.0);
+    if (!new_rot.is_valid()) return;
+
+    controller->set_control_rotation(new_rot);
+}
+
+
+// ============================================================
+// SOL UST MENU
+// ============================================================
+static void draw_menu(ucanvas* canvas)
+{
+    float x = 10, y = 10;
+    float w = 220, h = 280;
+    flinearcolor bg      = {0.08f, 0.08f, 0.12f, 0.95f};
+    flinearcolor accent  = {0.16f, 0.38f, 0.85f, 1.0f};
+    flinearcolor txt_col = {0.95f, 0.95f, 0.95f, 1.0f};
+    flinearcolor dark    = {0.05f, 0.05f, 0.08f, 1.0f};
+
+    // Background
+    draw_filled_rect(canvas, x, y, w, h, bg);
+    draw_rect(canvas, x, y, w, h, accent);
+
+    // Title
+    float text_y = y + 8;
+    canvas->k2_drawline({x + 10, text_y + 14}, {x + w - 10, text_y + 14}, 1.0f, accent);
+    text_y += 22;
+
+    // Tabs
+    float tab_w = 100, tab_h = 22;
+    // ESP tab
+    if (config::tab == 0)
+        draw_filled_rect(canvas, x + 5, text_y, tab_w, tab_h, accent);
+    else
+        draw_filled_rect(canvas, x + 5, text_y, tab_w, tab_h, dark);
+    // Aimbot tab
+    if (config::tab == 1)
+        draw_filled_rect(canvas, x + w - tab_w - 5, text_y, tab_w, tab_h, accent);
+    else
+        draw_filled_rect(canvas, x + w - tab_w - 5, text_y, tab_w, tab_h, dark);
+
+    // Tab click (cursor simulation)
+    POINT cur; GetCursorPos(&cur);
+    bool click = GetAsyncKeyState(VK_LBUTTON) & 1;
+    if (click) {
+        float mx = (float)cur.x, my = (float)cur.y;
+        if (mx >= x+5 && mx <= x+5+tab_w && my >= text_y && my <= text_y+tab_h)
+            config::tab = 0;
+        if (mx >= x+w-tab_w-5 && mx <= x+w-5 && my >= text_y && my <= text_y+tab_h)
+            config::tab = 1;
+    }
+
+    text_y += tab_h + 10;
+
+    if (config::tab == 0) {
+        // ESP Settings
+        // Box 3D toggle
+        bool* box = &config::box3d_enabled;
+        draw_filled_rect(canvas, x+10, text_y, 12, 12, *box ? accent : dark);
+        draw_rect(canvas, x+10, text_y, 12, 12, {0.3f,0.3f,0.3f,1});
+        if (click) {
+            float mx = (float)cur.x, my = (float)cur.y;
+            if (mx >= x+10 && mx <= x+22 && my >= text_y && my <= text_y+12)
+                *box = !*box;
+        }
+        text_y += 18;
+
+        // Visibility check
+        bool* vis = &config::vis_check;
+        draw_filled_rect(canvas, x+10, text_y, 12, 12, *vis ? accent : dark);
+        draw_rect(canvas, x+10, text_y, 12, 12, {0.3f,0.3f,0.3f,1});
+        if (click) {
+            float mx = (float)cur.x, my = (float)cur.y;
+            if (mx >= x+10 && mx <= x+22 && my >= text_y && my <= text_y+12)
+                *vis = !*vis;
+        }
+        text_y += 18;
+
+        // FOV slider
+        float* fov = &config::aim_fov;
+        float fov_prog = (*fov - 50) / (1000 - 50);
+        float sx = x + 65, sw = 140;
+        draw_filled_rect(canvas, sx, text_y+4, sw, 8, dark);
+        draw_filled_rect(canvas, sx, text_y+4, sw * fov_prog, 8, accent);
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
+            float mx = (float)cur.x;
+            if (mx >= sx && mx <= sx+sw && my >= text_y && my <= text_y+16) {
+                *fov = 50 + ((mx - sx) / sw) * (1000 - 50);
+            }
+        }
+        text_y += 24;
+    }
+    else {
+        // Aimbot Settings
+        bool* aim = &config::aimbot_enabled;
+        draw_filled_rect(canvas, x+10, text_y, 12, 12, *aim ? accent : dark);
+        draw_rect(canvas, x+10, text_y, 12, 12, {0.3f,0.3f,0.3f,1});
+        if (click) {
+            float mx = (float)cur.x, my = (float)cur.y;
+            if (mx >= x+10 && mx <= x+22 && my >= text_y && my <= text_y+12)
+                *aim = !*aim;
+        }
+        text_y += 18;
+
+        // Smooth slider
+        float* sm = &config::smooth;
+        float sm_prog = (*sm - 1) / (20 - 1);
+        float sx = x + 75, sw = 130;
+        draw_filled_rect(canvas, sx, text_y+4, sw, 8, dark);
+        draw_filled_rect(canvas, sx, text_y+4, sw * sm_prog, 8, accent);
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
+            float mx = (float)cur.x;
+            if (mx >= sx && mx <= sx+sw && my >= text_y && my <= text_y+16)
+                *sm = 1 + ((mx - sx) / sw) * (20 - 1);
+        }
+        text_y += 24;
+
+        // FOV slider
+        float* af = &config::aim_fov;
+        float af_prog = (*af - 50) / (1000 - 50);
+        sx = x + 55; sw = 150;
+        draw_filled_rect(canvas, sx, text_y+4, sw, 8, dark);
+        draw_filled_rect(canvas, sx, text_y+4, sw * af_prog, 8, accent);
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) {
+            float mx = (float)cur.x;
+            if (mx >= sx && mx <= sx+sw && my >= text_y && my <= text_y+16)
+                *af = 50 + ((mx - sx) / sw) * (1000 - 50);
+        }
+        text_y += 24;
+    }
+
+    // Menu toggle info
+    canvas->k2_drawline({x + 10, text_y}, {x + w - 10, text_y}, 1.0f, accent);
+}
+
+
+// ============================================================
+// MAIN HOOK (cagrilacak fonksiyon)
+// ============================================================
+/*
+  Bu fonksiyonu PostRender/DrawTransition hook'unun icinde cagir:
+
+    void your_hook(ucanvas* canvas, ...) {
+        run_box3d_aimbot(canvas, ...);
+    }
+
+  INSERT tusu menu acma/kapama
+*/
+void run_box3d_aimbot(uworld* world, aplayercontroller* controller,
+                      ashootercharacter* local, aplayercameramanager* camera,
+                      ucanvas* canvas)
+{
+    if (!canvas || !world || !controller || !local || !camera) return;
+
+    static bool prev_ins = false;
+    bool ins = GetAsyncKeyState(VK_INSERT) & 1;
+    if (ins && !prev_ins) config::menu_open = !config::menu_open;
+    prev_ins = ins;
+
+    if (config::menu_open) draw_menu(canvas);
+
+    run_esp(world, controller, local, canvas);
+    run_aimbot(world, controller, local, camera, canvas);
+}
